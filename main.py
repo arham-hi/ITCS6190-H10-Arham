@@ -67,8 +67,19 @@ def task1_ingest():
     files stay readable.
     """
     rides = read_rides()
-    # TODO
-    return None
+    parsed = (rides
+              .withColumn("fare_per_km", sround(col("fare_amount") / col("distance_km"), 2))
+              .select("trip_id", "driver_id", "distance_km", "fare_amount",
+                      "fare_per_km", "event_time"))
+
+    return (parsed.writeStream
+            .format("csv")
+            .option("header", "true")
+            .option("timestampFormat", "yyyy-MM-dd HH:mm:ss")
+            .option("checkpointLocation", ckpt_dir)
+            .outputMode("append")
+            .trigger(availableNow=True)
+            .start(out_dir))
 
 
 # ---------------------------------------------------------------- Task 2: windows and watermark
@@ -83,8 +94,29 @@ def task2_fare_per_window(mode):
     option as in task 1.
     """
     rides = read_rides()
-    # TODO
-    return None
+    totals = (rides
+              .withWatermark("event_time", "2 minutes")
+              .groupBy(window(col("event_time"), "2 minutes"))
+              .agg(count("*").alias("trips"),
+                   sround(ssum("fare_amount"), 2).alias("total_fare"))
+              .select(col("window.start").alias("window_start"),
+                      col("window.end").alias("window_end"),
+                      "trips", "total_fare"))
+
+    writer = (totals.writeStream
+              .outputMode(mode)
+              .option("checkpointLocation", ckpt_dir)
+              .trigger(availableNow=True))
+
+    if mode == "update":
+        return (writer.format("console")
+                .option("truncate", "false")
+                .start())
+
+    return (writer.format("csv")
+            .option("header", "true")
+            .option("timestampFormat", "yyyy-MM-dd HH:mm:ss")
+            .start(out_dir))
 
 
 # ---------------------------------------------------------------- main
